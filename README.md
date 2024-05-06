@@ -7,5 +7,5 @@
 
 
 ```shell
-yum -y install git wget && git clone https://github.com/ipmartnetwork/v2board.git /usr/local/src/v2board && cd /usr/local/src/v2board && chmod +x v2board.sh && ./v2board.sh
+curl -O https://raw.githubusercontent.com/ipmartnetwork/v2board/main/v2board.sh && chmod +x ./v2board.sh && ./v2board.sh
 ```
