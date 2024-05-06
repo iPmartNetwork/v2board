@@ -1,260 +1,326 @@
-#!/bin/sh
-#
-#Date:2022.06.05
-#Author:Ali Hassanzadeh
-#github:github.com/ipmartnetwork
+#!/usr/bin/bash
 
-process()
-{
-install_date="V2board_install_$(date +%Y-%m-%d_%H:%M:%S).log"
-printf "
-\033[36m#######################################################################
-#          Welcome to use V2board one-click deployment script      #
-#       Script adapter environment CentOS7+/RetHot7+, memory 1G+   #
-#For more information please visit https://github.com/ipmartnetwork#
-#######################################################################\033[0m
-"
 
-while :; do echo
-    read -p "Please enter the Mysql database root password: " Database_Password 
-    [ -n "$Database_Password" ] && break
+# Generate the random password
+char_pool='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+password_length=18
+password=""
+for _ in $(seq 1 "$password_length"); do
+  password+=${char_pool:RANDOM%${#char_pool}:1}
 done
+# Generate the random password
 
-# Start counting script execution time after receiving information
-START_TIME=`date +%s`
+server_ip=$(hostname -I | cut -d' ' -f1)
 
+NGINX_CONFIG="server {
+	listen 80;
 
-echo -e "\033[36m#######################################################################\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#            Disabling SElinux policy, please wait~                   #\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#######################################################################\033[0m"
-setenforce 0
-#Temporarily turn off SElinux
-sed -i "s/SELINUX=enforcing/SELINUX=disabled/" /etc/selinux/config
-#Permanently turn off SElinux
+	root /var/www/domain/public;
+	index index.html index.htm index.php;
+	server_name domain;
 
-echo -e "\033[36m#######################################################################\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#      Configuring Firewall policy. Please wait.                      #\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#######################################################################\033[0m"
-firewall-cmd --zone=public --add-port=80/tcp --permanent
-firewall-cmd --zone=public --add-port=443/tcp --permanent
-firewall-cmd --reload
-firewall-cmd --zone=public --list-ports
-#Release TCP ports 80 and 443
+	location / {
+		proxy_redirect off;
+		proxy_http_version 1.1;
+		proxy_set_header Upgrade \$http_upgrade;
+		proxy_set_header Connection "upgrade";
+		proxy_set_header Host \$http_host;
+		try_files \$uri \$uri/ /index.php\$is_args\$query_string;  
+	}
 
+	location ~ \.php$ {
+		proxy_redirect off;
+		proxy_http_version 1.1;
+		proxy_set_header Upgrade \$http_upgrade;
+		proxy_set_header Connection "upgrade";
+		proxy_set_header Host \$http_host;
+		include snippets/fastcgi-php.conf;
+		fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+	}
 
-echo -e "\033[36m########################################################################################\033[0m"
-echo -e "\033[36m#                                                                                               #\033[0m"
-echo -e "\033[36m#Downloading the installation package, it will take a long time, please wait~                   #\033[0m"
-echo -e "\033[36m#                                                                                               #\033[0m"
-echo -e "\033[36m########################################################################################\033[0m"
-# Download the installation package
-git clone https://gitee.com/gz1903/lnmp_rpm.git /usr/local/src/lnmp_rpm
-cd /usr/local/src/lnmp_rpm
-# Install nginx，mysql，php，redis
-echo -e "\033[36mDownload complete, start installation~\033[0m"
-rpm -ivhU /usr/local/src/lnmp_rpm/*.rpm --nodeps --force --nosignature
- 
-# Start nmp
-systemctl start php-fpm.service mysqld redis
+	location ~ /\. {
+		deny all;
+	}
+}"
 
-# Add to boot
-systemctl enable php-fpm.service mysqld nginx redis
-
-echo -e "\033[36m#######################################################################\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#           Configuring Mysql database. Please wait~                  #\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#######################################################################\033[0m"
-mysqladmin -u root password "$Database_Password"
-echo "---mysqladmin -u root password "$Database_Password""
-#Change database password
-mysql -uroot -p$Database_Password -e "CREATE DATABASE v2board CHARACTER SET utf8 COLLATE utf8_general_ci;"
-echo $?="Creating v2board database"
-
-echo -e "\033[36m#######################################################################\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#               Configuring PHP.ini, please wait~                     #\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#######################################################################\033[0m"
-sed -i "s/post_max_size = 8M/post_max_size = 32M/" /etc/php.ini
-sed -i "s/max_execution_time = 30/max_execution_time = 600/" /etc/php.ini
-sed -i "s/max_input_time = 60/max_input_time = 600/" /etc/php.ini
-sed -i "s#;date.timezone =#date.timezone = Asia/Shanghai#" /etc/php.ini
-# Configure php-sg11
-mkdir -p /sg
-wget -P /sg/  https://cdn.jsdelivr.net/gh/gz1903/sg11/Linux%2064-bit/ixed.7.3.lin
-sed -i '$a\extension=/sg/ixed.7.3.lin' /etc/php.ini
-#Modify PHP configuration file
-echo $?="PHP.ininConfiguration completed"
-
-echo -e "\033[36m#######################################################################\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#              Configuring Nginx, please wait~                        #\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#######################################################################\033[0m"
-cp -i /etc/nginx/conf.d/default.conf{,.bak}
-cat > /etc/nginx/conf.d/default.conf <<"eof"
-server {
-    listen       80;
-    root /usr/share/nginx/html/v2board/public;
-    index index.html index.htm index.php;
-
-    error_page   500 502 503 504  /50x.html;
-    #error_page   404 /404.html;
-    #fastcgi_intercept_errors on;
-
-    location / {
-        try_files $uri $uri/ /index.php$is_args$query_string;
-    }
-    location = /50x.html {
-        root   /usr/share/nginx/html/v2board/public;
-    }
-    #location = /404.html {
-    #    root   /usr/share/nginx/html/v2board/public;
-    #}
-    location ~ \.php$ {
-        root           html;
-        fastcgi_pass   127.0.0.1:9000;
-        fastcgi_index  index.php;
-        fastcgi_param  SCRIPT_FILENAME  /usr/share/nginx/html/v2board/public/$fastcgi_script_name;
-        include        fastcgi_params;
-    }
-    location /downloads {
-    }
-    location ~ .*\.(js|css)?$
-    {
-        expires      1h;
-        error_log off;
-        access_log /dev/null;
-    }
-}
-eof
-
-cat > /etc/nginx/nginx.conf <<"eon"
-
-user  nginx;
-worker_processes  auto;
-
-error_log  /var/log/nginx/error.log notice;
-pid        /var/run/nginx.pid;
-
+NGINX_CONFIG2="user www-data;
+worker_processes $(grep processor /proc/cpuinfo | wc -l);
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
 
 events {
-    worker_connections  1024;
+	worker_connections 1024;
+	multi_accept on;
 }
-
 
 http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
 
-    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
-                      '$status $body_bytes_sent "$http_referer" '
-                      '"$http_user_agent" "$http_x_forwarded_for"';
+    	log_format  main  '\$remote_addr - \$remote_user [\$time_local] \"\$request\" '
+                      '\$status \$body_bytes_sent \"\$http_referer\" '
+                      '\"\$http_user_agent\" \"\$http_x_forwarded_for\"';
 
-    access_log  /var/log/nginx/access.log  main;
-    #fastcgi_intercept_errors on;
+    	access_log  /var/log/nginx/access.log  main;
 
-    sendfile        on;
-    #tcp_nopush     on;
+	server_tokens off;
+    	sendfile            on;
+    	tcp_nopush          on;
+    	tcp_nodelay         on;
+    	keepalive_timeout   30;
+    	types_hash_max_size 4096;
+	client_max_body_size 64m;
 
-    keepalive_timeout  65;
+  	#Gzip Compression
+  	#gzip on;
+  	#gzip_buffers 16 8k;
+  	gzip_comp_level 5;
+  	#gzip_min_length 256;
+  	#gzip_proxied any;
+  	gzip_vary on;
+  	gzip_types
+    		text/xml application/xml application/atom+xml application/rss+xml application/xhtml+xml image/svg+xml
+    		text/javascript application/javascript application/x-javascript
+    		text/x-json application/json application/x-web-app-manifest+json
+    		text/css text/plain text/x-component
+    		font/opentype application/x-font-ttf application/vnd.ms-fontobject
+    		image/x-icon;
+  	gzip_disable \"MSIE [1-6]\.(?!.*SV1)\";
 
-    #gzip  on;
+    	include             /etc/nginx/mime.types;
+    	default_type        application/octet-stream;
 
-    include /etc/nginx/conf.d/*.conf;
-}
-eon
+	include /etc/nginx/conf.d/*.conf;
+	include /etc/nginx/sites-enabled/*;
+}"
 
-mv /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/v2board.conf
+BLUE='\033[1;44m'
+BLUE2='\033[1;34m'
+RED='\033[1;41m'
+RED2='\033[1;31m'
+GREEN='\033[1;42m'
+GREEN2='\033[1;32m'
+NC='\033[0m' # No Color
 
-# Create a php test file
-touch /usr/share/nginx/html/phpinfo.php
-cat > /usr/share/nginx/html/phpinfo.php <<eos
-<?php
-	phpinfo();
-?>
-eos
+# ----------- start command --------------
 
-echo -e "\033[36m#######################################################################\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#           V2board is being deployed. Please wait.                   #\033[0m"
-echo -e "\033[36m#                                                                     #\033[0m"
-echo -e "\033[36m#######################################################################\033[0m"
-rm -rf /usr/share/nginx/html/v2board
-cd /usr/share/nginx/html
-git clone https://github.com/v2board/v2board.git
-cd /usr/share/nginx/html/v2board
-echo -e "\033[36mPlease enter y to confirm the installation： \033[0m"
-sh /usr/share/nginx/html/v2board/init.sh
-git clone https://gitee.com/gz1903/v2board-theme-LuFly.git /usr/share/nginx/html/v2board/public/LuFly
-mv /usr/share/nginx/html/v2board/public/LuFly/* /usr/share/nginx/html/v2board/public/
-chmod -R 777 /usr/share/nginx/html/v2board
-# Add scheduled tasks
-echo "* * * * * root /usr/bin/php /usr/share/nginx/html/v2board/artisan schedule:run >/dev/null 2>/dev/null &" >> /etc/crontab
-# Install Node.js
-curl -sL https://rpm.nodesource.com/setup_10.x | bash -
-yum -y install nodejs
-npm install -g n
-n 17
-node -v
-# Install pm2
-npm install -g pm2
-# Add a daemon queue
-pm2 start /usr/share/nginx/html/v2board/pm2.yaml --name v2board
-# Save the existing list data, and automatically load the saved application list to start after booting
-pm2 save
-# Set the boot
-pm2 startup
+clear
 
-#Get the host intranet ip
-ip="$(ip addr | awk '/^[0-9]+: / {}; /inet.*global/ {print gensub(/(.*)\/(.*)/, "\\1", "g", $2)}')"
-#Get the host external network ip
-ips="$(curl ip.sb)"
+echo "nameserver 1.1.1.1" > /etc/resolv.conf
 
-systemctl restart php-fpm mysqld redis && nginx
-echo $?="Service startup completed"
-# Clear cache junk
-rm -rf /usr/local/src/v2board_install
-rm -rf /usr/local/src/lnmp_rpm
-rm -rf /usr/share/nginx/html/v2board/public/LuFly
+echo "nameserver 1.0.0.1" >> /etc/resolv.conf
 
-# V2Board Statistics of installation completion time
-END_TIME=`date +%s`
-EXECUTING_TIME=`expr $END_TIME - $START_TIME`
-echo -e "\033[36mThis installation used the$EXECUTING_TIME S!\033[0m"
+wget -N --no-check-certificate https://github.com/teddysun/across/raw/master/bbr.sh && chmod +x bbr.sh && bash bbr.sh
 
-echo -e "\033[32m--------------------------- Installation Completed ---------------------------\033[0m"
-echo -e "\033[32m##################################################################\033[0m"
-echo -e "\033[32m#                            V2board                             #\033[0m"
-echo -e "\033[32m##################################################################\033[0m"
-echo -e "\033[32m database username   :root\033[0m"
-echo -e "\033[32m Database password     :"$Database_Password
-echo -e "\033[32m Website Directory       :/usr/share/nginx/html/v2board \033[0m"
-echo -e "\033[32m Nginx Configuration File  :/etc/nginx/conf.d/v2board.conf \033[0m"
-echo -e "\033[32m PHP configuration directory    :/etc/php.ini \033[0m"
-echo -e "\033[32m Intranet access       :http://"$ip
-echo -e "\033[32m External network access       :http://"$ips
-echo -e "\033[32m Installation log files   :/var/log/"$install_date
-echo -e "\033[32m------------------------------------------------------------------\033[0m"
-echo -e "\033[32m If there are any problems with the installation, please report the installation log file.\033[0m"
-echo -e "\033[32m If you have any problems, please seek help here:https://github.comipmartnetwork\033[0m"
-echo -e "\033[32m E-mail:ipmart@ipmart.cloud\033[0m"
-echo -e "\033[32m------------------------------------------------------------------\033[0m"
+echo -e "\n${GREEN}Start installing V2board ${NC}\n"
 
-}
-LOGFILE=/var/log/"V2board_install_$(date +%Y-%m-%d_%H:%M:%S).log"
-touch $LOGFILE
-tail -f $LOGFILE &
-pid=$!
-exec 3>&1
-exec 4>&2
-exec &>$LOGFILE
-process
-ret=$?
-exec 1>&3 3>&-
-exec 2>&4 4>&-
+echo -e "${BLUE}First Update the pakage of server ${NC}\n"
+
+sleep 3
+
+apt-get update -y && apt-get upgrade -y
+
+echo -e "\n${BLUE}Install prerequisites ${NC}\n"
+
+sleep 2
+
+add-apt-repository ppa:ondrej/nginx -y
+
+apt update
+
+apt upgrade -y
+
+echo -e "\n${BLUE}3. Install nginx with cerbot ${NC}\n"
+
+sleep 2
+
+apt install nginx certbot python3-certbot-nginx -y
+
+echo -e "\n${GREEN}Installing nginx was finish ${NC}\n"
+
+echo -e "${RED2}Open the ${server_ip} to show first nginx page ${NC}\n"
+
+read -p "$(echo -e "${BLUE2}Is show first nginx page? (yes|no):${NC}  ")" nginx_status
+
+if [[ "$nginx_status" == *[Yy][Ee][Ss]* ]]; 
+then
+    
+    echo -e "\n${GREEN}Excellent, let's continue the work! ${NC}\n"
+
+    echo -e "${RED}Please set record A, your domain to $server_ip${NC}\n"
+
+    read -p "$(echo -e "${BLUE2}Send a domain without https:${NC} ")" domain
+
+    # Validate domain name
+    validate="^([a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.)+[a-zA-Z]{2,}$"
+
+    # If user doesn't enter anything
+    if [[ -z "$domain" ]]; then
+        echo -e "\n${RED}You must enter a domain ${NC}\n"
+    fi
+
+    if [[ "$domain" =~ $validate ]]; then
+        echo -e "\n${GREEN}Domain is valid and saved! ${NC}\n"
+
+        sleep 2
+
+		hostname $domain
+
+        cp /etc/nginx/sites-available/default /etc/nginx/sites-available/$domain
+
+        ln -s /etc/nginx/sites-available/$domain /etc/nginx/sites-enabled/
+
+        cp -r /var/www/html/ /var/www/$domain
+
+        rm -fr /etc/nginx/sites-available/default
+
+        rm -fr /etc/nginx/sites-enabled/default
+
+        rm -fr /etc/nginx/sites-available/$domain
+
+        rm -fr /etc/nginx/nginx.conf
+
+        echo "${NGINX_CONFIG//domain/"$domain"}"  >> /etc/nginx/sites-available/$domain
+
+        cpu=$(grep processor /proc/cpuinfo | wc -l)
+
+        echo "$NGINX_CONFIG2" >> /etc/nginx/nginx.conf
+
+        systemctl restart nginx
+
+        echo -e "\n${BLUE}installing ssl for $domain ${NC}\n"
+
+        sleep 2
+
+        certbot --nginx -d $domain --register-unsafely-without-email
+
+        echo -e "\n${BLUE}installing php 8.1 version ${NC}\n"
+
+        sleep 2
+
+        sudo apt install redis -y
+
+        sudo add-apt-repository ppa:ondrej/php -y
+
+        apt update
+
+        apt upgrade -y
+
+        apt install zip -y
+
+        apt install p7zip-full p7zip-rar -y
+
+        apt install php8.1-fpm php8.1-common php8.1-mysql \
+        php8.1-xml php8.1-xmlrpc php8.1-curl php8.1-gd \
+        php8.1-imagick php8.1-cli php8.1-dev php8.1-imap \
+        php8.1-mbstring php8.1-opcache php8.1-redis \
+        php8.1-soap php8.1-zip php8.1-pgsql -y
+
+        sudo apt install php8.1-cli unzip
+
+        cd ~
+
+        curl -sS https://getcomposer.org/installer -o /tmp/composer-setup.php
+        HASH=`curl -sS https://composer.github.io/installer.sig`
+        php -r "if (hash_file('SHA384', '/tmp/composer-setup.php') === '$HASH') { echo 'Installer verified'; } else { echo 'Installer corrupt'; unlink('composer-setup.php'); } echo PHP_EOL;"
+
+        sudo php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer
+
+		echo "fastcgi_param  SCRIPT_FILENAME    \$document_root\$fastcgi_script_name;" | tee -a /etc/nginx/fastcgi_params > /dev/null
+
+		echo "max_execution_time = 21600" | tee -a /etc/php/8.1/fpm/php.ini > /dev/null
+
+		echo "upload_max_filesize = 100M" | tee -a /etc/php/8.1/fpm/php.ini > /dev/null
+
+		echo "post_max_size = 100M" | tee -a /etc/php/8.1/fpm/php.ini > /dev/null
+
+		echo "max_file_uploads = 20" | tee -a /etc/php/8.1/fpm/php.ini > /dev/null
+
+		echo "max_input_vars = 200" | tee -a /etc/php/8.1/fpm/php.ini > /dev/null
+
+		echo "memory_limit = -1" | tee -a /etc/php/8.1/fpm/php.ini > /dev/null
+
+		echo "max_execution_time = 21600" | tee -a /etc/php/8.1/cli/php.ini > /dev/null
+
+		echo "upload_max_filesize = 100M" | tee -a /etc/php/8.1/cli/php.ini > /dev/null
+
+		echo "post_max_size = 100M" | tee -a /etc/php/8.1/cli/php.ini > /dev/null
+
+		echo "max_file_uploads = 20" | tee -a /etc/php/8.1/cli/php.ini > /dev/null
+
+		echo "max_input_vars = 200" | tee -a /etc/php/8.1/cli/php.ini > /dev/null
+
+		echo "memory_limit = -1" | tee -a /etc/php/8.1/cli/php.ini > /dev/null
+
+		echo -e "\n${BLUE}installing mariadb 10.4 version ${NC}\n"
+
+        sleep 2
+
+		apt-get install software-properties-common
+		apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
+		add-apt-repository 'deb [arch=amd64,arm64,ppc64el] http://mirrors.up.pt/pub/mariadb/repo/10.4/ubuntu focal main'
+
+		wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb && sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+
+		apt install mariadb-server -y
+
+		sudo mysql_secure_installation
+
+		mysql -u root -e "create database v2board;"
+
+		mysql -u root -e "DROP USER 'v2board'@'localhost';"
+
+		mysql -u root -e "create user v2board@localhost identified by '$password';"
+
+		mysql -u root -e "grant all privileges on v2board.* to v2board@localhost;"
+
+        echo -e "\n${BLUE}installing V2board from github ${NC}\n"
+
+        cd /var/www/$domain/
+
+        rm -fr *
+
+        git init
+
+        git remote add origin https://github.com/v2board/v2board.git
+
+        git pull origin master
+
+        composer install
+
+		echo -e "\n${GREEN}your db info:${NC}\nname: v2board\nuser: v2board\npass:$password\n"
+
+        php artisan v2board:install
+
+        sudo chmod -R 755 /var/www/$domain/
+
+        sudo chown -R www-data:www-data /var/www/$domain/
+
+		echo -e "\n${BLUE}installing PM2 ${NC}\n"
+
+		curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+
+		sudo apt install -y nodejs
+
+		sudo npm install -g pm2
+
+		cd /var/www/$domain/
+
+		pm2 start pm2.yaml
+
+		pm2 startup
+
+		systemctl enable pm2-root
+
+		pm2 list
+
+		systemctl enable nginx
+
+		systemctl restart nginx
+
+
+    else
+        echo -e "\n${RED}Not valid $domain name.=${NC}\n"
+    fi
+    
+else
+    echo -e "\n${RED}Check firewall and open the nginx ports ${NC}\n"
+fi
